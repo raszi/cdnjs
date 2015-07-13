@@ -4,8 +4,9 @@ var assert = require("assert"),
     path = require("path"),
     fs = require("fs"),
     glob = require("glob"),
-    vows = require("vows"),
-    jsv = require("JSV").JSV.createEnvironment();
+    vows = require("vows-si"),
+    jsv = require("JSV").JSV.createEnvironment(),
+    isThere = require("is-there");
 
 function parse(json_file, ignore_missing, ignore_parse_fail) {
     var content;
@@ -22,7 +23,7 @@ function parse(json_file, ignore_missing, ignore_parse_fail) {
         return JSON.parse(content);
     } catch (err2) {
         if (!ignore_parse_fail) {
-            assert.ok(0, json_file + " failed to parse");
+            assert.ok(0, json_file + " failed to parse, you can validate your json here: http://jsonlint.com/");
         }
         return null;
     }
@@ -51,7 +52,7 @@ packages.map(function (pkg) {
         pname = pkg_name(pkg),
         context = {};
     package_vows[pname + " has package.json"] = function (pkg) {
-        assert.ok(fs.existsSync(pkg), pkg_name(pkg) + " missing!");
+        assert.ok(isThere(pkg), pkg_name(pkg) + " missing!");
     };
     package_vows[pname + " package.json is well-formed"] = function (pkg) {
         assert.ok(parse(pkg, true),
@@ -97,13 +98,74 @@ packages.map(function (pkg) {
         var json = parse(pkg, true, true);
         var filePath = "./ajax/libs/" + json.name + "/"+ json.version
             + "/" + json.filename;
-        assert.ok(fs.existsSync(filePath),
+        assert.ok(isThere(filePath),
                   filePath +" does not exist but is referenced in package.json!");
     };
+    package_vows[pname + ": required file exist"] = function (pkg) {
+      var json = parse(pkg, true, true);
+      if (json.requiredFiles !== undefined) {
+        for (var i in json.requiredFiles) {
+          var filePath = "./ajax/libs/" + json.name + "/"+ json.version + "/" + json.requiredFiles[i];
+          assert.ok(isThere(filePath), filePath +" does not exist but is required!");
+        }
+      }
+    };
+    package_vows[pname + ": name in package.json should be parent folder name"] = function (pkg) {
+        var json = parse(pkg, true, true);
+        var dirs = pkg.split("/");
+        var trueName = dirs[dirs.length - 2];
+        assert.ok(trueName == json.name,
+            pkg_name(pkg) + ": Name property should be '" + trueName + "', not '" + json.name +"'");
+    };
 
+    var targetPrefixes = new RegExp("^git://.+\.git$");
+    package_vows[pname + ": autoupdate block is valid (if present)"] = function (pkg) {
+        var json = parse(pkg, true, true);
+        if (json.autoupdate) {
+            assert.ok(json.autoupdate.source == "git",
+                pkg_name(pkg) + ": Autoupdate source should be 'git', not " + json.autoupdate.source);
+            assert.ok(targetPrefixes.test(json.autoupdate.target),
+                pkg_name(pkg) + ": Autoupdate target should match '" + targetPrefixes +
+                "', but is " + json.autoupdate.target);
+        }
+    }
+    package_vows[pname + ": should not have both multiple auto-update configs"] = function(pkg) {
+        var json = parse(pkg, true, true);
+        assert.ok(json.autoupdate === undefined || json.npmFileMap === undefined,
+            pkg_name(pkg) + ": has both git and npm auto-update config, should remove one of it");
+    }
+    package_vows[pname + ": should point filename field to minified file"] = function (pkg) {
+        var json = parse(pkg, true, true);
+        if (json.filename) {
+            var path = "./ajax/libs/" + json.name + "/"+ json.version + "/",
+                orig = json.filename.split("."),
+                min = '';
+            if (orig[orig.length - 2] !== 'min') {
+                var temp = orig,
+                    ext = temp.pop();
+                temp.push("min");
+                temp.push(ext);
+                min = temp.join(".");
+            }
+            assert.ok(min === '' || !isThere(path + min),
+                pkg_name(pkg) + ": filename field in package.json should point filename field to minified file.");
+        }
+    }
+
+    package_vows[pname + ": format check"] = function (pkg) {
+        var orig = fs.readFileSync(pkg, 'utf8'),
+            correct = JSON.stringify(JSON.parse(orig), null, 2) + '\n';
+        assert.ok(orig === correct,
+            pkg_name(pkg) + ": package.json wrong format, correct one should be like this.\n(Remove the first 2 spaces of each line and include blank line at end if you copy and paste this example)\n" + correct +"\n");
+    }
+
+    package_vows[pname + ": useless fields check"] = function (pkg) {
+        var json = parse(pkg, true, true);
+        assert.ok(json.scripts === undefined && json.devDependencies === undefined,
+            pkg_name(pkg) + ": we don't need scripts and devDependencies fields in package.json");
+    }
     context[pname] = package_vows;
     suite.addBatch(context);
 });
 
 suite.export(module);
-
